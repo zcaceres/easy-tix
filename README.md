@@ -13,6 +13,130 @@ Choose macOS ARM64 (Apple Silicon) or x86-64 (Intel), Linux ARM64 or x86-64,
 or Windows x86-64. No Rust, Bash, Python, or external command-line utilities
 are required to run the binary.
 
+### Copy-paste installer (latest release)
+
+Install [GitHub CLI](https://cli.github.com/) and run `gh auth login` first,
+using an account with access to `zcaceres/easy-tix`. The installer needs network
+access and `gh`; the installed binary does not. These snippets resolve the latest
+release **once**, detect your OS/CPU, download the matching binary and license,
+and verify both against that release's `SHA256SUMS` before installing.
+No `sudo`, remote script execution, or shell-profile changes.
+
+**macOS / Linux:** paste this entire block into your terminal. It installs or
+updates `~/.local/bin/ticket`. Set `TICKET_INSTALL_DIR` to override the directory.
+
+<!-- install-unix:start -->
+```sh
+bash <<'INSTALL_TICKET'
+set -euo pipefail
+repo=zcaceres/easy-tix
+command -v gh >/dev/null || { echo "Install GitHub CLI and run gh auth login first." >&2; exit 1; }
+os=$(uname -s)
+cpu=$(uname -m)
+case "$os/$cpu" in
+  Darwin/arm64|Darwin/aarch64) platform=macos-arm64 ;;
+  Darwin/x86_64) platform=macos-x86_64 ;;
+  Linux/aarch64|Linux/arm64) platform=linux-arm64 ;;
+  Linux/x86_64|Linux/amd64) platform=linux-x86_64 ;;
+  *) echo "Unsupported system: $os/$cpu" >&2; exit 1 ;;
+esac
+tag=$(gh release view --repo "$repo" --json tagName --jq .tagName)
+[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Unexpected release tag: $tag" >&2; exit 1; }
+asset="ticket-$tag-$platform"
+dir="${TICKET_INSTALL_DIR:-$HOME/.local/bin}"
+mkdir -p "$dir"
+dir=$(cd "$dir" && pwd)
+[[ ! -d "$dir/ticket" ]] || { echo "$dir/ticket is a directory" >&2; exit 1; }
+tmp=$(mktemp -d)
+stage=
+trap 'rm -rf "$tmp"; if [[ -n "$stage" ]]; then rm -f "$stage"; fi' EXIT
+gh release download "$tag" --repo "$repo" --dir "$tmp" \
+  --pattern "$asset" --pattern SHA256SUMS --pattern LICENSE
+(
+  cd "$tmp"
+  awk -v asset="$asset" '$2 == asset { print; binary++ }
+    $2 == "LICENSE" { print; license++ }
+    END { if (binary != 1 || license != 1) exit 1 }' SHA256SUMS > selected-checksums
+  if [[ "$os" == Darwin ]]; then
+    shasum -a 256 -c selected-checksums
+  else
+    sha256sum -c selected-checksums
+  fi
+)
+stage=$(mktemp "$dir/.ticket.XXXXXX")
+install -m 755 "$tmp/$asset" "$stage"
+install -m 644 "$tmp/LICENSE" "$dir/ticket.LICENSE"
+mv -f "$stage" "$dir/ticket"
+stage=
+printf 'Installed %s to %s/ticket\n' "$tag" "$dir"
+printf 'Run "%s/ticket" help and "%s/ticket" agent-guide\n' "$dir" "$dir"
+case ":$PATH:" in *":$dir:"*) ;; *) printf 'To use ticket by name, add this directory to PATH: %s\n' "$dir" ;; esac
+INSTALL_TICKET
+```
+<!-- install-unix:end -->
+
+**Windows x86-64 (PowerShell):** installs or updates
+`$HOME\.local\bin\ticket.exe`. Set `$env:TICKET_INSTALL_DIR` to override.
+Close a running copy of Tickets before updating.
+
+<!-- install-windows:start -->
+```powershell
+& {
+    $ErrorActionPreference = 'Stop'
+    $repo = 'zcaceres/easy-tix'
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        throw 'Install GitHub CLI and run gh auth login first.'
+    }
+    $cpu = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    if ($env:OS -ne 'Windows_NT' -or $cpu -ne 'X64') {
+        throw "This installer supports Windows x86-64 only (detected $cpu)."
+    }
+    $tag = gh release view --repo $repo --json tagName --jq .tagName
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to read latest release. Check GitHub access.' }
+    if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Unexpected release tag: $tag" }
+    $asset = "ticket-$tag-windows-x86_64.exe"
+    $dir = if ($env:TICKET_INSTALL_DIR) { $env:TICKET_INSTALL_DIR } else { Join-Path $HOME '.local\bin' }
+    $null = New-Item -ItemType Directory -Force -Path $dir
+    $dir = (Resolve-Path -LiteralPath $dir).Path
+    $destination = Join-Path $dir 'ticket.exe'
+    if (Test-Path -LiteralPath $destination -PathType Container) { throw "$destination is a directory" }
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
+    $stage = Join-Path $dir ('.ticket-' + [guid]::NewGuid().ToString() + '.tmp')
+    $null = New-Item -ItemType Directory -Path $tmp
+    try {
+        gh release download $tag --repo $repo --dir $tmp --pattern $asset --pattern SHA256SUMS --pattern LICENSE
+        if ($LASTEXITCODE -ne 0) { throw 'Release download failed.' }
+        $manifest = Get-Content -LiteralPath (Join-Path $tmp 'SHA256SUMS')
+        foreach ($name in @($asset, 'LICENSE')) {
+            $pattern = '^([a-fA-F0-9]{64})  ' + [regex]::Escape($name) + '$'
+            $entries = @($manifest | Where-Object { $_ -match $pattern })
+            if ($entries.Count -ne 1) { throw "Missing or duplicate checksum for $name" }
+            $expected = $entries[0].Substring(0, 64)
+            $actual = (Get-FileHash -LiteralPath (Join-Path $tmp $name) -Algorithm SHA256).Hash
+            if ($actual -ne $expected) { throw "Checksum mismatch for $name" }
+        }
+        Copy-Item -LiteralPath (Join-Path $tmp $asset) -Destination $stage
+        Copy-Item -LiteralPath (Join-Path $tmp 'LICENSE') -Destination (Join-Path $dir 'ticket.LICENSE') -Force
+        Move-Item -LiteralPath $stage -Destination $destination -Force
+        Write-Host "Installed $tag to $destination"
+        Write-Host "Run: & '$destination' help"
+        Write-Host "For agent instructions: & '$destination' agent-guide"
+        Write-Host "To use ticket by name, add this directory to PATH: $dir"
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force
+        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Force }
+    }
+}
+```
+<!-- install-windows:end -->
+
+Both installers replace an existing executable only after verification and leave
+ticket data untouched. They do not change PATH or automatically approve OS trust
+prompts. Review the snippets before running; checksums verify download integrity,
+not an independent publisher identity. For a manual install, continue below.
+
+### Manual install
+
 Rename the download to `ticket` (`ticket.exe` on Windows). On macOS/Linux:
 
 ```sh
