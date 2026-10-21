@@ -1,0 +1,4 @@
+.delta/
+__pycache__/
+*.pyc
+.venv/
