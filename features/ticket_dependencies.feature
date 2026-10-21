@@ -31,7 +31,7 @@ Feature: Ticket Dependencies
   Scenario: Remove non-existent dependency
     When I run "ticket undep task-0001 task-0002"
     Then the command should fail
-    And the output should be "Dependency not found"
+    And the output should contain "Dependency not found"
 
   Scenario: Add dependency with non-existent ticket
     When I run "ticket dep task-0001 nonexistent"

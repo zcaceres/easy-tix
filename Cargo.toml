@@ -1,0 +1,18 @@
+[package]
+name = "easy-tix"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Local-only, agent-friendly ticket tracking in plain Markdown"
+repository = "https://github.com/zcaceres/easy-tix"
+publish = false
+
+[[bin]]
+name = "ticket"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

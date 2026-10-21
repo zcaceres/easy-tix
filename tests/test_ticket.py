@@ -2,14 +2,15 @@
 
 import os
 from pathlib import Path
-import pty
 import shutil
 import subprocess
 import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "ticket"
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = Path(os.environ.get("TICKET_SCRIPT", ROOT / "target" / "release" /
+                            ("ticket.exe" if os.name == "nt" else "ticket"))).resolve()
 
 
 class TicketTests(unittest.TestCase):
@@ -26,7 +27,7 @@ class TicketTests(unittest.TestCase):
     def cli(self, *args, ok=True, input=None, cwd=None):
         result = subprocess.run(
             [str(SCRIPT), *args], cwd=cwd or self.root, env=self.env,
-            input=input, text=True, capture_output=True, timeout=10,
+            input=input, text=True, encoding="utf-8", capture_output=True, timeout=10,
         )
         if ok:
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -112,24 +113,31 @@ class TicketTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
         # The old pager path only ran when stdout was a terminal.
-        master, slave = pty.openpty()
-        try:
-            result = subprocess.run(
-                [str(SCRIPT), "show", tid], cwd=self.root, env=self.env,
-                stdin=subprocess.DEVNULL, stdout=slave, stderr=subprocess.PIPE,
-                timeout=10,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(marker.exists())
-        finally:
-            os.close(slave)
-            os.close(master)
+        if os.name != "nt":
+            import pty
+            master, slave = pty.openpty()
+            try:
+                result = subprocess.run(
+                    [str(SCRIPT), "show", tid], cwd=self.root, env=self.env,
+                    stdin=subprocess.DEVNULL, stdout=slave, stderr=subprocess.PIPE,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(marker.exists())
+            finally:
+                os.close(slave)
+                os.close(master)
 
     def test_symlink_entries_rejected(self):
         tid = self.create()
         outside = self.root / "outside.md"
         outside.write_text("untouched")
-        (self.store / "escape.md").symlink_to(outside)
+        try:
+            (self.store / "escape.md").symlink_to(outside)
+        except OSError:
+            if os.name == "nt":
+                self.skipTest("Windows account lacks symlink permission")
+            raise
         for args in (("show", "escape"), ("add-note", "escape", "bad"),
                      ("ls",), ("ready",), ("close", tid)):
             self.cli(*args, ok=False)
@@ -155,8 +163,82 @@ class TicketTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.cli(command), "")
 
+    def test_binary_runs_without_external_programs(self):
+        self.env["PATH"] = ""
+        self.env["BASH_ENV"] = str(self.root / "must-not-be-read")
+        self.assertIn("ticket 0.1.0", self.cli("--version"))
+        self.assertEqual(self.cli("agent-guide"), (ROOT / "AGENT_GUIDE.md").read_text(encoding="utf-8"))
+        parent = self.create("Parent")
+        child = self.create("Child", "--parent", parent)
+        self.cli("dep", child, parent)
+        self.cli("start", parent)
+        self.cli("add-note", parent, input="No external processes needed\n")
+        self.cli("close", parent)
+        self.assertIn(child, self.cli("ready"))
+        self.assertIn(parent, self.cli("closed"))
+        self.assertIn(parent, self.cli("dep", "tree", child))
+
+    def test_legacy_file_round_trip(self):
+        self.store.mkdir()
+        path = self.store / "legacy-0001.md"
+        body = "# Literal | title : ✓\n\n---\nstatus: leave this alone\n$(touch injected)\n"
+        path.write_text(
+            "---\nid: legacy-0001\nstatus: open\ndeps: []\nlinks: []\n"
+            "created: 2024-01-01T00:00:00Z\ntype: task\npriority: 1\n"
+            "custom: keep / & \\\nassignee: A: B\ntags: [ui, api]\n---\n" + body,
+            encoding="utf-8",
+        )
+        self.assertIn("Literal | title : ✓", self.cli("ready", "-a", "A: B"))
+        self.cli("start", "0001")
+        content = path.read_text(encoding="utf-8")
+        self.assertTrue(content.endswith(body))
+        self.assertIn("custom: keep / & \\\n", content)
+        self.assertFalse((self.root / "injected").exists())
+
+    def test_bad_options_and_malformed_files_fail(self):
+        tid = self.create()
+        for args in (("ready", "--unknown"), ("blocked", "-a"), ("show", tid, "extra"),
+                     ("status", tid), ("create", "--tags", "[bad]")):
+            with self.subTest(args=args):
+                self.cli(*args, ok=False)
+        path = self.store / f"{tid}.md"
+        original = path.read_text()
+        path.write_text(original.replace("status: open", "status: open\nstatus: closed"))
+        self.cli("show", tid, ok=False)
+        self.cli("close", tid, ok=False)
+        self.assertIn("status: open\nstatus: closed", path.read_text())
+
+    def test_cycles_missing_dependencies_and_idempotent_links(self):
+        one = self.create("One")
+        two = self.create("Two")
+        self.cli("dep", one, two)
+        self.cli("dep", two, one)
+        self.assertIn("Dependency cycles:", self.cli("dep", "cycle"))
+        self.cli("dep", "tree", "--full", one)
+        self.cli("undep", two, one)
+        self.assertIn("No dependency cycles", self.cli("dep", "cycle"))
+        self.cli("link", one, two)
+        path = self.store / f"{one}.md"
+        before = path.stat().st_mtime_ns
+        self.assertEqual(self.cli("link", one, two).strip(), "All links already exist")
+        self.assertEqual(before, path.stat().st_mtime_ns)
+        self.cli("unlink", one, two)
+        self.cli("unlink", one, two, ok=False)
+        (self.store / f"{two}.md").unlink()
+        self.assertIn(one, self.cli("blocked"))
+        self.assertNotIn(one, self.cli("ready"))
+        self.assertIn("[missing]", self.cli("show", one))
+
+    def test_failed_multi_link_does_not_partially_change_files(self):
+        one = self.create("One")
+        two = self.create("Two")
+        self.cli("link", one, two, "nonexistent", ok=False)
+        self.assertIn("links: []", self.cli("show", one))
+        self.assertIn("links: []", self.cli("show", two))
+
     def test_closed_paths_order_filters_and_limit(self):
-        self.store = self.root / "project space's\nstore" / ".tickets"
+        dirname = "project space's store" if os.name == "nt" else "project space's\nstore"
+        self.store = self.root / dirname / ".tickets"
         self.env["TICKETS_DIR"] = str(self.store)
         older = self.create("Older", "--tags", "old")
         newer = self.create("Newer", "--tags", "new")
@@ -186,8 +268,9 @@ class TicketTests(unittest.TestCase):
             )
         self.assertIn(tid, self.cli("closed", "--limit=1"))
 
+    @unittest.skipIf(os.name == "nt", "Bash example; native lifecycle tested separately")
     def test_documented_agent_workflow(self):
-        guide = (SCRIPT.parent / "AGENT_GUIDE.md").read_text()
+        guide = (ROOT / "AGENT_GUIDE.md").read_text()
         demo = guide.split("<!-- agent-demo:start -->", 1)[1]
         demo = demo.split("<!-- agent-demo:end -->", 1)[0]
         script = demo.split("```bash\n", 1)[1].split("```", 1)[0]

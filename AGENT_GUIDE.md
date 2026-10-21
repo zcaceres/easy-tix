@@ -3,7 +3,10 @@
 Tickets is a local CLI, not a service. This guide assumes the executable is
 `./ticket` in the project root. Run commands from that root; if your project
 installs it as `tk`, substitute `tk`. Run `./ticket help` for exact syntax.
-No MCP server, plugin, account, network access, or package installation is needed.
+The standalone binary embeds this guide: `./ticket agent-guide` prints it.
+On Windows, use `.\ticket.exe` in PowerShell. No MCP server, plugin, account,
+network access, shell utilities, or package installation is needed at runtime.
+The shell examples below use Bash syntax; the CLI itself does not require Bash.
 
 ## Start a session
 
@@ -82,8 +85,8 @@ An empty or failed `ready` result is not permission to ignore blockers.
   commands and notes. If direct file edits are required, coordinate them, keep
   the restricted frontmatter format intact, and resolve incoming relationships
   before removing a ticket.
-- Read the README's security boundary. This tool is not a sandbox; its shell,
-  environment, utilities, and selected local directory must be trusted.
+- Read the README's security boundary. This tool is not a sandbox; its executable,
+  environment, OS, and selected local directory must be trusted.
 
 ## Runnable demonstration
 

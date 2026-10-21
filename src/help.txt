@@ -1,0 +1,39 @@
+ticket - minimal ticket system with dependency tracking
+
+Usage: ticket <command> [args]
+
+Commands:
+  create [title] [options] Create ticket, prints ID
+    -d, --description TEXT Description text
+    --design TEXT          Design notes
+    --acceptance TEXT      Acceptance criteria
+    -t, --type TYPE        bug|feature|task|epic|chore (default task)
+    -p, --priority N       0-4, 0 highest (default 2)
+    -a, --assignee NAME    Assignee
+    --external-ref TEXT    External reference (stored locally only)
+    --parent ID            Parent ticket (grouping, not a dependency)
+    --tags TAGS            Comma-separated tags
+  start <id>               Set status to in_progress (not a lock)
+  close <id>               Set status to closed
+  reopen <id>              Set status to open
+  status <id> <status>     open|in_progress|closed
+  dep <id> <dep-id>        ID depends on DEP-ID
+  dep tree [--full] <id>   Show dependency tree
+  dep cycle               Find cycles in active tickets
+  undep <id> <dep-id>      Remove dependency
+  link <id> <id> [id...]   Link tickets symmetrically
+  unlink <id> <target-id>  Remove link
+  ls|list [--status=X] [-a X] [-T X] List tickets
+  ready [-a X] [-T X]      Active tickets with resolved dependencies
+  blocked [-a X] [-T X]    Active tickets with unresolved dependencies
+  closed [--limit=N] [-a X] [-T X] Recently modified closed tickets (default 20)
+  show <id>               Display ticket and relationships
+  add-note <id> [text]     Append timestamped note (or read stdin)
+  agent-guide             Print the embedded agent workflow guide
+  --version               Print version
+  help                    Show this help
+
+Filters also accept --assignee=X and --tag=X.
+Searches parent directories for .tickets/; TICKETS_DIR overrides the directory.
+Supports unambiguous partial IDs. Creates Markdown files compatible with Tickets.
+No network, subprocesses, plugins, editor, pager, or Git integration.

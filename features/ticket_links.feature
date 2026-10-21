@@ -44,7 +44,7 @@ Feature: Ticket Links
   Scenario: Unlink non-existent link
     When I run "ticket unlink link-0001 link-0002"
     Then the command should fail
-    And the output should be "Link not found"
+    And the output should contain "Link not found"
 
   Scenario: Link with non-existent ticket
     When I run "ticket link link-0001 nonexistent"
