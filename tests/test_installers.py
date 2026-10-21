@@ -75,22 +75,24 @@ class UnixInstallerTests(InstallerFixture):
 import os, sys
 print(os.environ["MOCK_OS" if sys.argv[1] == "-s" else "MOCK_CPU"])
 """,
-            "gh": """
+            "curl": """
 import os, pathlib, shutil, sys
 a = sys.argv[1:]
-if a[1] == os.environ.get("MOCK_FAIL"):
+assert a[0] == "-q", "ignore user curl configuration"
+assert a[a.index("--proto") + 1] == "=https"
+assert a[a.index("--proto-redir") + 1] == "=https"
+step = "view" if "--write-out" in a else "download"
+if step == os.environ.get("MOCK_FAIL"):
     sys.exit(1)
-if a[:2] == ["release", "view"]:
-    print(os.environ["MOCK_TAG"])
-elif a[:2] == ["release", "download"]:
-    assert a[2] == os.environ["MOCK_TAG"], "download must use the resolved tag"
-    dest = pathlib.Path(a[a.index("--dir") + 1])
-    for i, arg in enumerate(a):
-        if arg == "--pattern":
-            name = a[i+1]
-            shutil.copyfile(pathlib.Path(os.environ["MOCK_DOWNLOADS"]) / name, dest / name)
+base = "https://github.com/zcaceres/easy-tix/releases/"
+if step == "view":
+    assert a[-1] == base + "latest"
+    print(base + "tag/" + os.environ["MOCK_TAG"])
 else:
-    sys.exit(2)
+    assert a[-1].startswith(base + "download/" + os.environ["MOCK_TAG"] + "/")
+    dest = pathlib.Path(a[a.index("--output") + 1])
+    name = a[-1].rsplit("/", 1)[1]
+    shutil.copyfile(pathlib.Path(os.environ["MOCK_DOWNLOADS"]) / name, dest)
 """,
         }
         for name, code in mocks.items():
@@ -158,18 +160,19 @@ else:
 class WindowsInstallerTests(InstallerFixture):
     def run_installer(self, ok=True):
         mock = r"""
-function gh {
-    $a = @($args)
-    $global:LASTEXITCODE = 0
-    if ($a[1] -eq $env:MOCK_FAIL) { $global:LASTEXITCODE = 1; return }
-    if ($a[1] -eq 'view') { return $env:MOCK_TAG }
-    if ($a[1] -ne 'download' -or $a[2] -ne $env:MOCK_TAG) { throw 'Wrong download tag' }
-    $dest = $a[[Array]::IndexOf($a, '--dir') + 1]
-    for ($i = 0; $i -lt $a.Count; $i++) {
-        if ($a[$i] -eq '--pattern') {
-            Copy-Item -LiteralPath (Join-Path $env:MOCK_DOWNLOADS $a[$i+1]) -Destination $dest
-        }
-    }
+function Invoke-RestMethod {
+    param([string]$Uri)
+    if ($env:MOCK_FAIL -eq 'view') { throw 'Simulated API failure' }
+    if ($Uri -ne 'https://api.github.com/repos/zcaceres/easy-tix/releases/latest') { throw 'Wrong API URL' }
+    return @{ tag_name = $env:MOCK_TAG }
+}
+function Invoke-WebRequest {
+    param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile)
+    if ($env:MOCK_FAIL -eq 'download') { throw 'Simulated download failure' }
+    $prefix = "https://github.com/zcaceres/easy-tix/releases/download/$env:MOCK_TAG/"
+    if (-not $Uri.StartsWith($prefix)) { throw 'Wrong download tag' }
+    $name = $Uri.Substring($prefix.Length)
+    Copy-Item -LiteralPath (Join-Path $env:MOCK_DOWNLOADS $name) -Destination $OutFile
 }
 """
         script = self.root / "install-test.ps1"

@@ -2,7 +2,8 @@
 
 Download the executable for your OS and CPU. No Rust toolchain, Bash, Python,
 package manager, or external command-line utilities are required to run it.
-The repository is private: sign into GitHub with an account that has access.
+The repository and release downloads are public; no GitHub account is required.
+The README includes platform-detecting installers with checksum verification.
 
 | Platform | Asset |
 | --- | --- |

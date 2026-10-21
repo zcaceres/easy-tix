@@ -8,16 +8,16 @@ requests, telemetry, plugins, editor launching, or pager launching.
 
 Download a standalone executable from
 [GitHub Releases](https://github.com/zcaceres/easy-tix/releases/latest).
-This is a private repository: downloads require a GitHub account with access.
+The repository and release downloads are public; no GitHub account is required.
 Choose macOS ARM64 (Apple Silicon) or x86-64 (Intel), Linux ARM64 or x86-64,
 or Windows x86-64. No Rust, Bash, Python, or external command-line utilities
 are required to run the binary.
 
 ### Copy-paste installer (latest release)
 
-Install [GitHub CLI](https://cli.github.com/) and run `gh auth login` first,
-using an account with access to `zcaceres/easy-tix`. The installer needs network
-access and `gh`; the installed binary does not. These snippets resolve the latest
+No GitHub account, token, or GitHub CLI is needed. The installer uses `curl`
+and standard utilities on macOS/Linux, or PowerShell on Windows, with network
+access only during installation. These snippets resolve the latest
 release **once**, detect your OS/CPU, download the matching binary and license,
 and verify both against that release's `SHA256SUMS` before installing.
 No `sudo`, remote script execution, or shell-profile changes.
@@ -29,8 +29,9 @@ updates `~/.local/bin/ticket`. Set `TICKET_INSTALL_DIR` to override the director
 ```sh
 bash <<'INSTALL_TICKET'
 set -euo pipefail
-repo=zcaceres/easy-tix
-command -v gh >/dev/null || { echo "Install GitHub CLI and run gh auth login first." >&2; exit 1; }
+base=https://github.com/zcaceres/easy-tix
+command -v curl >/dev/null || { echo "Install curl first." >&2; exit 1; }
+fetch() { curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --retry 3 "$@"; }
 os=$(uname -s)
 cpu=$(uname -m)
 case "$os/$cpu" in
@@ -40,7 +41,8 @@ case "$os/$cpu" in
   Linux/x86_64|Linux/amd64) platform=linux-x86_64 ;;
   *) echo "Unsupported system: $os/$cpu" >&2; exit 1 ;;
 esac
-tag=$(gh release view --repo "$repo" --json tagName --jq .tagName)
+latest=$(fetch --output /dev/null --write-out '%{url_effective}' "$base/releases/latest")
+tag="${latest##*/}"
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Unexpected release tag: $tag" >&2; exit 1; }
 asset="ticket-$tag-$platform"
 dir="${TICKET_INSTALL_DIR:-$HOME/.local/bin}"
@@ -50,8 +52,9 @@ dir=$(cd "$dir" && pwd)
 tmp=$(mktemp -d)
 stage=
 trap 'rm -rf "$tmp"; if [[ -n "$stage" ]]; then rm -f "$stage"; fi' EXIT
-gh release download "$tag" --repo "$repo" --dir "$tmp" \
-  --pattern "$asset" --pattern SHA256SUMS --pattern LICENSE
+for file in "$asset" SHA256SUMS LICENSE; do
+  fetch --output "$tmp/$file" "$base/releases/download/$tag/$file"
+done
 (
   cd "$tmp"
   awk -v asset="$asset" '$2 == asset { print; binary++ }
@@ -83,16 +86,13 @@ Close a running copy of Tickets before updating.
 ```powershell
 & {
     $ErrorActionPreference = 'Stop'
-    $repo = 'zcaceres/easy-tix'
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw 'Install GitHub CLI and run gh auth login first.'
-    }
+    $base = 'https://github.com/zcaceres/easy-tix'
     $cpu = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
     if ($env:OS -ne 'Windows_NT' -or $cpu -ne 'X64') {
         throw "This installer supports Windows x86-64 only (detected $cpu)."
     }
-    $tag = gh release view --repo $repo --json tagName --jq .tagName
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to read latest release. Check GitHub access.' }
+    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/zcaceres/easy-tix/releases/latest'
+    $tag = $release.tag_name
     if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Unexpected release tag: $tag" }
     $asset = "ticket-$tag-windows-x86_64.exe"
     $dir = if ($env:TICKET_INSTALL_DIR) { $env:TICKET_INSTALL_DIR } else { Join-Path $HOME '.local\bin' }
@@ -104,8 +104,9 @@ Close a running copy of Tickets before updating.
     $stage = Join-Path $dir ('.ticket-' + [guid]::NewGuid().ToString() + '.tmp')
     $null = New-Item -ItemType Directory -Path $tmp
     try {
-        gh release download $tag --repo $repo --dir $tmp --pattern $asset --pattern SHA256SUMS --pattern LICENSE
-        if ($LASTEXITCODE -ne 0) { throw 'Release download failed.' }
+        foreach ($name in @($asset, 'SHA256SUMS', 'LICENSE')) {
+            Invoke-WebRequest -UseBasicParsing -Uri "$base/releases/download/$tag/$name" -OutFile (Join-Path $tmp $name)
+        }
         $manifest = Get-Content -LiteralPath (Join-Path $tmp 'SHA256SUMS')
         foreach ($name in @($asset, 'LICENSE')) {
             $pattern = '^([a-fA-F0-9]{64})  ' + [regex]::Escape($name) + '$'
@@ -133,7 +134,10 @@ Close a running copy of Tickets before updating.
 Both installers replace an existing executable only after verification and leave
 ticket data untouched. They do not change PATH or automatically approve OS trust
 prompts. Review the snippets before running; checksums verify download integrity,
-not an independent publisher identity. For a manual install, continue below.
+not an independent publisher identity. If GitHub temporarily rate-limits an
+anonymous request, retry later or use the manual download links. Installation
+does not configure credentials or send ticket data anywhere.
+For a manual install, continue below.
 
 ### Manual install
 
