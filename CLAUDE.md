@@ -8,7 +8,7 @@ For using Tickets to manage tasks, read AGENT_GUIDE.md and run `./ticket help`.
 - GitHub Actions may build and publish the five approved release binaries.
 - The CLI is a standalone Rust executable `ticket`, with Markdown ticket storage.
 - Treat ticket input as data, never executable code.
-- Run `make test` for offline Rust and standard-library Python regression tests.
-- `make test-bdd` is optional and requires an already-installed Behave.
+- Run `make test` for offline Rust unit and CLI integration tests.
+- Installer tests run the README snippets in Bash (Unix) or PowerShell (Windows).
 - Update README.md and tests when changing command behavior.
 - Retain LICENSE and attribution when reusing the original implementation.

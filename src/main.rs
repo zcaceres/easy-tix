@@ -57,12 +57,20 @@ fn run(args: &[String]) -> Result<String> {
         "--version" | "version" => return Ok(format!("ticket {}\n", env!("CARGO_PKG_VERSION"))),
         "agent-guide" => return Ok(include_str!("../AGENT_GUIDE.md").into()),
         "create" | "start" | "close" | "reopen" | "status" | "dep" | "undep" | "link"
-        | "unlink" | "ls" | "list" | "ready" | "blocked" | "closed" | "show" | "add-note" => {}
+        | "unlink" | "ls" | "list" | "ready" | "blocked" | "closed" | "show" | "add-note"
+        | "update" | "delete" => {}
         _ => return Err(format!("Unknown command: {command}")),
     }
     let mut store = Store::open(command == "create")?;
     match command {
         "create" => create(&mut store, args),
+        "update" => update(&mut store, args),
+        "delete" => {
+            arity(args, 1, 1, "delete <id>")?;
+            let id = store.resolve(&args[0])?;
+            store.delete(&id)?;
+            Ok(format!("Deleted {id}\n"))
+        }
         "ls" | "list" | "ready" | "blocked" | "closed" => list(&store, command, args),
         "show" => {
             arity(args, 1, 1, "show <id>")?;
@@ -201,9 +209,10 @@ fn run(args: &[String]) -> Result<String> {
     }
 }
 
-fn create(store: &mut Store, args: &[String]) -> Result<String> {
+type Fields = BTreeMap<&'static str, String>;
+
+fn parse_fields(args: &[String], updating: bool) -> Result<Fields> {
     let mut fields = BTreeMap::new();
-    let mut title = "Untitled".to_string();
     let mut title_seen = false;
     let mut i = 0;
     while i < args.len() {
@@ -219,6 +228,8 @@ fn create(store: &mut Store, args: &[String]) -> Result<String> {
                 "--external-ref" => "external-ref",
                 "--parent" => "parent",
                 "--tags" => "tags",
+                "--title" if updating => "title",
+                "--status" if updating => "status",
                 _ => return Err(format!("Unknown option: {arg}")),
             };
             i += 1;
@@ -226,63 +237,119 @@ fn create(store: &mut Store, args: &[String]) -> Result<String> {
                 .get(i)
                 .ok_or_else(|| format!("missing value for {arg}"))?;
             fields.insert(key, value.clone());
+        } else if updating {
+            return Err(format!(
+                "Unexpected argument: {arg}; use --title to change the title"
+            ));
         } else if title_seen {
             return Err("Pass the title as one quoted argument".into());
         } else {
-            title.clone_from(arg);
+            fields.insert("title", arg.clone());
             title_seen = true;
         }
         i += 1;
     }
-    let kind = fields.get("type").map(String::as_str).unwrap_or("task");
-    if !["bug", "feature", "task", "epic", "chore"].contains(&kind) {
-        return Err(format!("invalid type '{kind}'"));
+    if let Some(kind) = fields.get("type") {
+        if !["bug", "feature", "task", "epic", "chore"].contains(&kind.as_str()) {
+            return Err(format!("invalid type '{kind}'"));
+        }
     }
-    let priority = fields.get("priority").map(String::as_str).unwrap_or("2");
-    if !["0", "1", "2", "3", "4"].contains(&priority) {
-        return Err("priority must be 0-4".into());
+    if let Some(priority) = fields.get("priority") {
+        if !["0", "1", "2", "3", "4"].contains(&priority.as_str()) {
+            return Err("priority must be 0-4".into());
+        }
     }
-    for value in std::iter::once(&title).chain(fields.iter().filter_map(|(key, value)| {
+    if let Some(value) = fields.get("status") {
+        status(value)?;
+    }
+    for value in fields.iter().filter_map(|(key, value)| {
         if ["description", "design", "acceptance"].contains(key) {
             None
         } else {
             Some(value)
         }
-    })) {
+    }) {
         if value.contains(['\n', '\r']) {
             return Err("title and metadata must be single-line values".into());
         }
     }
+    if let Some(tags) = fields.get("tags") {
+        parse_tags(tags)?;
+    }
+    Ok(fields)
+}
+
+fn parse_tags(value: &str) -> Result<Vec<String>> {
+    if value.contains(['[', ']']) {
+        return Err("tags cannot contain brackets".into());
+    }
+    Ok(value
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(String::from)
+        .collect())
+}
+
+fn apply_metadata(store: &Store, ticket: &mut Ticket, fields: &Fields) -> Result<()> {
+    for key in ["type", "priority", "status"] {
+        if let Some(value) = fields.get(key) {
+            ticket.set(key, value);
+        }
+    }
+    for key in ["assignee", "external-ref"] {
+        if let Some(value) = fields.get(key) {
+            if value.is_empty() {
+                ticket.remove(key);
+            } else {
+                ticket.set(key, value);
+            }
+        }
+    }
+    if let Some(parent) = fields.get("parent") {
+        if parent.is_empty() {
+            ticket.remove("parent");
+        } else {
+            let parent = store.resolve(parent)?;
+            // Keep reparenting from creating a cycle, including indirect self-parenting.
+            let mut cursor = parent.as_str();
+            let mut seen = BTreeSet::new();
+            while !cursor.is_empty() {
+                if cursor == ticket.id() || !seen.insert(cursor) {
+                    return Err("parent relationship would create or join a cycle".into());
+                }
+                cursor = store
+                    .tickets
+                    .get(cursor)
+                    .map(|t| t.get("parent"))
+                    .unwrap_or("");
+            }
+            ticket.set("parent", &parent);
+        }
+    }
+    if let Some(tags) = fields.get("tags") {
+        ticket.set_array("tags", &parse_tags(tags)?);
+    }
+    Ok(())
+}
+
+fn create(store: &mut Store, args: &[String]) -> Result<String> {
+    let fields = parse_fields(args, false)?;
+    let title = fields
+        .get("title")
+        .map(String::as_str)
+        .unwrap_or("Untitled");
     let mut ticket = Ticket::new();
     ticket.set("status", "open");
     ticket.set("deps", "[]");
     ticket.set("links", "[]");
     ticket.set("created", &timestamp());
-    ticket.set("type", kind);
-    ticket.set("priority", priority);
-    for key in ["assignee", "external-ref"] {
-        if let Some(value) = fields.get(key).filter(|v| !v.is_empty()) {
-            ticket.set(key, value);
-        }
-    }
-    if let Some(parent) = fields.get("parent").filter(|v| !v.is_empty()) {
-        ticket.set("parent", &store.resolve(parent)?);
-    }
-    if let Some(tags) = fields.get("tags") {
-        let tags: Vec<String> = tags
-            .split(',')
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .map(String::from)
-            .collect();
-        if tags.iter().any(|t| t.contains(['[', ']'])) {
-            return Err("tags cannot contain brackets".into());
-        }
-        ticket.set_array("tags", &tags);
-    }
+    ticket.set("type", "task");
+    ticket.set("priority", "2");
+    apply_metadata(store, &mut ticket, &fields)?;
     ticket.body = format!(
         "# {}\n\n",
-        if title.is_empty() { "Untitled" } else { &title }
+        if title.is_empty() { "Untitled" } else { title }
     );
     for (key, heading) in [
         ("description", ""),
@@ -298,6 +365,30 @@ fn create(store: &mut Store, args: &[String]) -> Result<String> {
         }
     }
     Ok(format!("{}\n", store.create(ticket)?))
+}
+
+fn update(store: &mut Store, args: &[String]) -> Result<String> {
+    arity(args, 2, usize::MAX, "update <id> [options]")?;
+    let id = store.resolve(&args[0])?;
+    let fields = parse_fields(&args[1..], true)?;
+    // Work on a copy: all validation and Markdown editing must succeed before save.
+    let mut ticket = store.tickets[&id].clone();
+    apply_metadata(store, &mut ticket, &fields)?;
+    if let Some(title) = fields.get("title") {
+        ticket.set_title(if title.is_empty() { "Untitled" } else { title })?;
+    }
+    for (key, heading) in [
+        ("description", ""),
+        ("design", "Design"),
+        ("acceptance", "Acceptance Criteria"),
+    ] {
+        if let Some(value) = fields.get(key) {
+            ticket.set_section(heading, value)?;
+        }
+    }
+    store.tickets.insert(id.clone(), ticket);
+    store.save(&id)?;
+    Ok(format!("Updated {id}\n"))
 }
 
 #[derive(Default)]

@@ -18,6 +18,7 @@ pub fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+#[derive(Clone)]
 pub struct Ticket {
     pub fields: Vec<(String, String)>,
     pub body: String,
@@ -82,6 +83,79 @@ impl Ticket {
             self.fields.push((field.into(), value.into()));
         }
     }
+    pub fn remove(&mut self, field: &str) {
+        self.fields.retain(|(key, _)| key != field);
+    }
+
+    pub fn set_title(&mut self, title: &str) -> Result<()> {
+        let headings = markdown_headings(&self.body)?;
+        let titles: Vec<_> = headings.iter().filter(|h| h.level == 1).collect();
+        match titles.as_slice() {
+            [] => self.body.insert_str(0, &format!("# {title}\n\n")),
+            [heading] => self
+                .body
+                .replace_range(heading.start..heading.end, &format!("# {title}\n")),
+            _ => return Err("multiple top-level titles; cannot safely update Markdown".into()),
+        }
+        Ok(())
+    }
+
+    /// Replace only the description or one named level-two section, never notes.
+    /// Byte offsets preserve the rest of the document, including CRLF and code.
+    pub fn set_section(&mut self, name: &str, value: &str) -> Result<()> {
+        let headings = markdown_headings(&self.body)?;
+        let titles: Vec<_> = headings.iter().filter(|h| h.level == 1).collect();
+        if titles.len() != 1 {
+            return Err("expected one top-level title; cannot safely update Markdown".into());
+        }
+        let title = titles[0];
+        let sections: Vec<_> = headings
+            .iter()
+            .filter(|h| h.level == 2 && h.start >= title.end)
+            .collect();
+        if name.is_empty() {
+            let end = sections.first().map_or(self.body.len(), |h| h.start);
+            let replacement = if value.is_empty() {
+                "\n".into()
+            } else {
+                format!("\n{value}\n\n")
+            };
+            self.body.replace_range(title.end..end, &replacement);
+            return Ok(());
+        }
+        let matches: Vec<_> = sections.iter().filter(|h| h.title == name).collect();
+        let replacement = if value.is_empty() {
+            String::new()
+        } else {
+            format!("## {name}\n\n{value}\n\n")
+        };
+        match matches.as_slice() {
+            [] => {
+                if !replacement.is_empty() {
+                    // Insert new editable sections before Notes, leaving existing notes intact.
+                    let at = sections
+                        .iter()
+                        .find(|h| h.title == "Notes")
+                        .map_or(self.body.len(), |h| h.start);
+                    self.body.insert_str(at, &format!("\n{replacement}"));
+                }
+            }
+            [heading] => {
+                let end = sections
+                    .iter()
+                    .find(|h| h.start > heading.start)
+                    .map_or(self.body.len(), |h| h.start);
+                self.body.replace_range(heading.start..end, &replacement);
+            }
+            _ => {
+                return Err(format!(
+                    "multiple '{name}' sections; cannot safely update Markdown"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn array(&self, field: &str) -> Vec<String> {
         self.get(field)
             .trim()
@@ -111,6 +185,52 @@ impl Ticket {
         text.push_str(&self.body);
         text
     }
+}
+
+struct Heading<'a> {
+    start: usize,
+    end: usize,
+    level: u8,
+    title: &'a str,
+}
+
+fn markdown_headings(body: &str) -> Result<Vec<Heading<'_>>> {
+    let mut headings = Vec::new();
+    let mut offset = 0;
+    let mut fence = None;
+    for line in body.split_inclusive('\n') {
+        let end = offset + line.len();
+        let text = line.trim_end_matches(['\r', '\n']);
+        let indent = text.bytes().take_while(|b| *b == b' ').count();
+        if indent <= 3 {
+            let text = &text[indent..];
+            let first = text.as_bytes().first().copied().unwrap_or_default();
+            let run = text.bytes().take_while(|b| *b == first).count();
+            if let Some((marker, length)) = fence {
+                if first == marker && run >= length && text[run..].trim().is_empty() {
+                    fence = None;
+                }
+            } else if (first == b'`' || first == b'~') && run >= 3 {
+                fence = Some((first, run));
+            } else if let Some((level, title)) = text
+                .strip_prefix("# ")
+                .map(|s| (1, s))
+                .or_else(|| text.strip_prefix("## ").map(|s| (2, s)))
+            {
+                headings.push(Heading {
+                    start: offset,
+                    end,
+                    level,
+                    title: title.trim(),
+                });
+            }
+        }
+        offset = end;
+    }
+    if fence.is_some() {
+        return Err("unclosed Markdown code fence; cannot safely update Markdown".into());
+    }
+    Ok(headings)
 }
 
 pub struct Store {
@@ -189,6 +309,36 @@ impl Store {
             (Some(_), Some(_)) => Err(format!("ambiguous ID '{query}' matches multiple tickets")),
             _ => Err(format!("ticket '{query}' not found")),
         }
+    }
+
+    pub fn delete(&self, id: &str) -> Result<()> {
+        // Resolve incoming relationships explicitly, never cascade to other files.
+        let mut references = Vec::new();
+        for ticket in self.tickets.values().filter(|t| t.id() != id) {
+            for field in ["deps", "links"] {
+                if ticket.array(field).iter().any(|value| value == id) {
+                    references.push(format!("{} ({field})", ticket.id()));
+                }
+            }
+            if ticket.get("parent") == id {
+                references.push(format!("{} (parent)", ticket.id()));
+            }
+        }
+        if !references.is_empty() {
+            return Err(format!(
+                "cannot delete {id}: referenced by {}; remove these relationships first",
+                references.join(", ")
+            ));
+        }
+        let path = self.directory.join(format!("{id}.md"));
+        let metadata = fs::symlink_metadata(&path).map_err(|e| io_error(&path, e))?;
+        if !metadata.file_type().is_file() {
+            return Err(format!(
+                "ticket files must be regular files: {}",
+                path.display()
+            ));
+        }
+        fs::remove_file(&path).map_err(|e| io_error(&path, e))
     }
 
     pub fn create(&mut self, mut ticket: Ticket) -> Result<String> {
@@ -310,6 +460,20 @@ fn iso_timestamp(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ambiguous_markdown_is_not_overwritten() {
+        for body in [
+            "# Title\n\n```\n## Notes\nunfinished code\n",
+            "# Title\n\n## Design\none\n## Design\ntwo\n",
+            "# Title\n# Second title\n## Notes\nkeep\n",
+        ] {
+            let mut ticket = Ticket::new();
+            ticket.body = body.into();
+            assert!(ticket.set_section("Design", "new").is_err());
+            assert_eq!(ticket.body, body);
+        }
+    }
+
     #[test]
     fn utc_calendar() {
         assert_eq!(iso_timestamp(0), "1970-01-01T00:00:00Z");

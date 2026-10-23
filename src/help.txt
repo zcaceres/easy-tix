@@ -13,6 +13,13 @@ Commands:
     --external-ref TEXT    External reference (stored locally only)
     --parent ID            Parent ticket (grouping, not a dependency)
     --tags TAGS            Comma-separated tags
+  update <id> [options]    Change only supplied fields; all create options plus:
+    --title TEXT           Replace title (empty means Untitled)
+    --status STATUS        open|in_progress|closed
+                           Empty optional values clear the field/section.
+                           Preserves notes and unrelated Markdown/metadata.
+  delete <id>              Permanently remove an unreferenced ticket, no prompt
+                           Refuses incoming deps, links, or parent references.
   start <id>               Set status to in_progress (not a lock)
   close <id>               Set status to closed
   reopen <id>              Set status to open

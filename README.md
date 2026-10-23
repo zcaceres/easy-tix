@@ -185,6 +185,10 @@ Rust 1.93.1 and tests the actual executable on each target.
   `--acceptance`, `-t/--type` (bug, feature, task, epic, chore),
   `-p/--priority` (0–4, default 2), `-a/--assignee`, `--external-ref`,
   `--parent`, and `--tags` (comma-separated). Assignee defaults to empty.
+- `update <id> [options]`: change only supplied fields using the same options as
+  `create`, plus `--title TEXT` and `--status open|in_progress|closed`.
+- `delete <id>`: permanently remove a ticket, without an interactive prompt.
+  Refuses deletion if another ticket references it through deps, links, or parent.
 - `show <id>`: displays the ticket and its relationships, directly to stdout.
 - `start`, `close`, `reopen`: change a ticket's status.
 - `status <id> <open|in_progress|closed>`: explicitly set status.
@@ -207,9 +211,44 @@ and its ancestors for `.tickets/`; `create` initializes it if absent.
 `TICKETS_DIR` explicitly selects another local directory.
 
 Ticket descriptions are Markdown, not executable content. Metadata and titles
-must be single-line values. To edit other fields or delete a ticket, currently
-edit/remove its local file yourself; dedicated update/delete commands remain
-follow-up work. Remove incoming relationships before deleting a file.
+must be single-line values.
+
+### Updating and deleting
+
+These commands are available starting with v0.2.0; users of v0.1.0 should upgrade
+using the installer above.
+
+```sh
+./ticket update <id> --title "Clarified task" -p 1 --assignee "Alice"
+./ticket update <id> --description "New scope" --acceptance "Checks pass"
+./ticket update <id> --parent "" --tags ""  # Clear parent and tags
+./ticket delete <id>
+```
+
+`update` leaves unspecified fields, ID, creation timestamp, dependencies, links,
+notes, and unknown metadata untouched. Use `dep`/`undep` and `link`/`unlink` to
+change relationships. Parent IDs must resolve to an existing ticket and cannot
+form a parent cycle.
+
+Empty optional values clear assignee, external reference, parent, tags, description,
+design, or acceptance criteria; an empty title becomes `Untitled`. Type, priority,
+and status must still be valid values. All supplied changes are validated before
+the ticket is written.
+
+For Markdown edits, description means the text between the `# Title` and first
+`##` section; design and acceptance target `## Design` and `## Acceptance Criteria`.
+Other sections and existing notes remain intact. Headings inside backtick/tilde
+code fences are ignored. Ambiguous titles/target sections or unclosed fences cause
+body edits to fail rather than risk overwriting unrelated content; metadata-only
+updates do not parse the body. This is a small section editor for the generated
+ticket layout, not a general Markdown parser.
+
+`delete` does not cascade or force-remove references, even from closed tickets.
+Its error lists incoming references: resolve them explicitly with `undep`,
+`unlink`, or `update CHILD --parent ""`, then retry. Outgoing dependencies do not
+prevent deletion. Deletion has no built-in undo; use the full ID and prefer
+`close` when you want to retain the ticket history. Concurrency limitations are
+unchanged.
 
 ### Compatibility
 
@@ -243,13 +282,26 @@ YAML implementation. Avoid hand-written duplicate metadata or malformed files.
 
 ## Tests
 
-`make test` builds the release binary and runs Rust unit tests and Python 3
-standard-library CLI regression tests offline. It installs nothing.
-On Windows (without Make), run `cargo build --release --locked --offline`,
-`cargo test --locked --offline`, then `python -m unittest discover -s tests -v`.
+Run `make test`, or directly on any supported platform:
 
-The inherited BDD scenarios remain under `features/`. If Behave is already
-installed, `make test-bdd` runs them without downloading dependencies.
+```sh
+cargo test --release --locked --offline
+```
+
+Cargo builds the binary and runs Rust unit and black-box CLI integration tests.
+There are no test crates to download and no Python/Behave dependency.
+The CLI tests use isolated directories and invoke the real executable, including
+tests with an empty PATH and the guide's exact end-to-end example.
+
+Installer tests execute the README snippets using Bash on macOS/Linux and
+PowerShell 7 (`pwsh`) on Windows, with mocked HTTP responses and real checksum
+verification; they never download releases. Unix tests also exercise the release
+packaging script using system checksum utilities. These shell tools are test/build
+requirements only, not dependencies of the installed CLI.
+
+CI tests the exact release executable on each platform. Set `TICKET_SCRIPT` to
+an absolute executable path to test a particular build locally.
+See [the coverage map](tests/README.md) for the retired suites' replacements.
 
 ## Agent guidance
 

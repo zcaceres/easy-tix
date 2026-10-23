@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 — editing, deletion, and Rust tests
+
+- Replace Python CLI tests and the 104 Behave scenarios with grouped Rust
+  integration tests, preserving CLI, security, Markdown, and workflow coverage.
+- Run installer checks from Cargo using native Bash/PowerShell fixtures; replace
+  Python release packaging with a tested Bash script and remove setup-python.
+- Add `update` for title, metadata, description, design, and acceptance criteria;
+  preserve notes and unrelated content, validate changes before writing, and
+  reject parent cycles.
+- Add noninteractive `delete`, refusing incoming dependency/link/parent
+  references rather than cascading changes to other tickets.
+- Update pinned GitHub Actions to releases explicitly using Node.js 24.
+- Leave concurrent-write behavior unchanged.
+
 ## 0.1.0 — standalone Rust binaries
 
 - Replace Bash with a dependency-free Rust executable; retain Markdown storage
