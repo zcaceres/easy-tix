@@ -256,6 +256,11 @@ Existing files created by the Bash CLI require no migration. Unknown metadata
 fields and Markdown bodies are preserved on updates. Frontmatter is a restricted
 line-based format, not full YAML: duplicate fields, mismatched filename/ID,
 and malformed headers fail explicitly instead of being silently misread.
+Fields use `key: value`: one optional ASCII space immediately after `:` is
+formatting; any remaining spaces, tabs, or Unicode whitespace belong to the value.
+Scalar text such as assignees and external references preserves that whitespace
+on creation, reads, and updates; assignee filters match the exact stored value.
+Tag entries are still trimmed around commas.
 Errors consistently go to stderr with a nonzero exit status, including missing
 links/dependencies. Unknown options and extra arguments are rejected. New IDs
 use the first three alphanumeric characters of the working directory plus a

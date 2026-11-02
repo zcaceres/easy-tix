@@ -557,6 +557,97 @@ fn legacy_body_and_unknown_metadata_round_trip() {
 }
 
 #[test]
+fn metadata_whitespace_survives_filters_and_unrelated_writes() {
+    for value in [
+        " Alice ",
+        "  Alice  ",
+        "\tAlice\t",
+        "\u{2003}Alice\u{a0}",
+        " \t ",
+    ] {
+        let s = Sandbox::new();
+        let blocker = s.create(&["Blocker"]);
+        let id = s.create(&["Whitespace", "-a", value, "--external-ref", value]);
+        let original = s.text(&id).replace(
+            "status: open\n",
+            &format!("status: open\ncustom: {value}\n"),
+        );
+        fs::write(s.path(&id), &original).unwrap();
+        let check_values = || {
+            for text in [s.text(&id), s.ok(&["show", &id])] {
+                for field in ["assignee", "external-ref", "custom"] {
+                    let line = format!("{field}: {value}");
+                    assert!(
+                        text.lines().any(|l| l == line),
+                        "missing {line:?} in {text:?}"
+                    );
+                }
+            }
+        };
+        check_values();
+        for command in ["ls", "list", "ready"] {
+            for flags in [
+                vec!["-a".into(), value.into()],
+                vec![format!("--assignee={value}")],
+            ] {
+                let args: Vec<_> = std::iter::once(command)
+                    .chain(flags.iter().map(String::as_str))
+                    .collect();
+                let output = s.ok(&args);
+                assert_eq!(output.lines().count(), 1);
+                contains(&output, &[&id]);
+            }
+        }
+        assert_eq!(s.text(&id), original, "reads must not change the file");
+        s.ok(&["dep", &id, &blocker]);
+        contains(&s.ok(&["blocked", "-a", value]), &[&id]);
+        check_values();
+        s.ok(&["undep", &id, &blocker]);
+        s.ok(&["link", &id, &blocker]);
+        check_values();
+        s.ok(&["unlink", &id, &blocker]);
+        for (command, status) in [
+            ("start", "in_progress"),
+            ("close", "closed"),
+            ("reopen", "open"),
+        ] {
+            let before = s.text(&id);
+            let status_line = before.lines().find(|l| l.starts_with("status:")).unwrap();
+            s.ok(&[command, &id]);
+            assert_eq!(
+                s.text(&id),
+                before.replace(status_line, &format!("status: {status}"))
+            );
+            check_values();
+            if status == "closed" {
+                contains(&s.ok(&["closed", &format!("--assignee={value}")]), &[&id]);
+            }
+        }
+        s.ok(&["update", &id, "-p", "1"]);
+        s.ok(&["add-note", &id, "Unrelated note"]);
+        check_values();
+        let updated_value = format!(" {value} ");
+        s.ok(&[
+            "update",
+            &id,
+            "-a",
+            &updated_value,
+            "--external-ref",
+            &updated_value,
+        ]);
+        for field in ["assignee", "external-ref"] {
+            contains(
+                &s.ok(&["show", &id]),
+                &[&format!("{field}: {updated_value}\n")],
+            );
+        }
+        contains(&s.ok(&["ready", "-a", &updated_value]), &[&id]);
+        s.ok(&["close", &id]);
+        contains(&s.text(&id), &[&format!("assignee: {updated_value}\n")]);
+    }
+}
+
+#[test]
 fn standalone_binary_needs_no_programs_on_path() {
     let s = Sandbox::new();
     let call = |args: &[&str]| {
