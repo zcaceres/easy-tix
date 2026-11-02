@@ -265,7 +265,16 @@ Errors consistently go to stderr with a nonzero exit status, including missing
 links/dependencies. Unknown options and extra arguments are rejected. New IDs
 use the first three alphanumeric characters of the working directory plus a
 four-character suffix; existing ID prefixes continue to work unchanged.
-Dependency traversals reject graphs deeper than 256 levels.
+Dependency traversals are limited to 256 levels.
+
+`dep tree` sorts dependencies by longest depth, then ID. It computes sorting
+depths once using strongly connected components and a reverse-topological pass,
+so shared prerequisites are not repeatedly traversed. Tickets in the same cycle
+share a sorting depth. Default output expands each ticket once and marks repeated
+references as already shown; `--full` expands shared branches again but still
+cuts cycles. Consequently, `--full` can produce much larger output than the graph
+itself. Depth analysis is linear in reachable vertices and dependency edges;
+sibling sorting and writing the tree have their own costs.
 
 ## Security boundary
 

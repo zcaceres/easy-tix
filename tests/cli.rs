@@ -301,6 +301,137 @@ fn tree_depth_then_id_order_full_output_and_cycles() {
 }
 
 #[test]
+fn tree_handles_layered_shared_dependencies_without_expanding_paths() {
+    let s = Sandbox::new();
+    let levels = 128;
+    for level in 0..levels {
+        for side in ["a", "b"] {
+            let id = format!("dag-{level:03}-{side}");
+            s.fixture(&id, &id, 2);
+            if level + 1 < levels {
+                let next = level + 1;
+                let text = s.text(&id).replace(
+                    "deps: []",
+                    &format!("deps: [dag-{next:03}-a, dag-{next:03}-b]"),
+                );
+                fs::write(s.path(&id), text).unwrap();
+            }
+        }
+    }
+    let before = s.snapshot();
+    let tree = s.ok(&["dep", "tree", "dag-000-a"]);
+    assert_eq!(tree.lines().count(), levels * 4 - 5);
+    assert_eq!(tree.matches("(already shown)").count(), levels * 2 - 4);
+    contains(&tree, &["dag-127-a [open]", "dag-127-b [open]"]);
+    assert_eq!(s.snapshot(), before);
+}
+
+#[test]
+fn tree_depth_limit_includes_cached_shared_subgraphs() {
+    for chain_length in [254, 255] {
+        let s = Sandbox::new();
+        s.fixture("leaf", "Leaf", 2);
+        s.fixture("root", "Root", 2);
+        fs::write(
+            s.path("root"),
+            s.text("root")
+                .replace("deps: []", "deps: [leaf, chain-000]"),
+        )
+        .unwrap();
+        for node in 0..chain_length {
+            let id = format!("chain-{node:03}");
+            let dep = if node + 1 == chain_length {
+                "leaf".to_string()
+            } else {
+                format!("chain-{:03}", node + 1)
+            };
+            s.fixture(&id, &id, 2);
+            fs::write(
+                s.path(&id),
+                s.text(&id).replace("deps: []", &format!("deps: [{dep}]")),
+            )
+            .unwrap();
+        }
+        let before = s.snapshot();
+        if chain_length == 254 {
+            contains(&s.ok(&["dep", "tree", "root"]), &["leaf [open]"]);
+        } else {
+            contains(
+                &s.fail(&["dep", "tree", "root"]),
+                &["dependency graph exceeds 256 levels"],
+            );
+        }
+        assert_eq!(s.snapshot(), before);
+    }
+}
+
+#[test]
+fn tree_bounds_cyclic_rendering_without_scanning_unreachable_components() {
+    let s = Sandbox::new();
+    s.fixture("leaf", "Leaf", 2);
+    for node in 0..257 {
+        let id = format!("cycle-{node:03}");
+        let dep = format!("cycle-{:03}", (node + 1) % 257);
+        s.fixture(&id, &id, 2);
+        fs::write(
+            s.path(&id),
+            s.text(&id).replace("deps: []", &format!("deps: [{dep}]")),
+        )
+        .unwrap();
+    }
+    let before = s.snapshot();
+    assert_eq!(s.ok(&["dep", "tree", "leaf"]), "leaf [open] Leaf\n");
+    for args in [
+        vec!["dep", "tree", "cycle-000"],
+        vec!["dep", "tree", "--full", "cycle-000"],
+    ] {
+        contains(&s.fail(&args), &["dependency graph exceeds 256 levels"]);
+    }
+    assert_eq!(s.snapshot(), before);
+}
+
+#[test]
+fn tree_orders_cycle_components_and_missing_leaves() {
+    let s = Sandbox::new();
+    for (id, deps) in [
+        ("root", "cycle-a, missing, short"),
+        ("cycle-a", "cycle-b"),
+        ("cycle-b", "cycle-a, tail"),
+        ("tail", ""),
+        ("short", ""),
+    ] {
+        s.fixture(id, id, 2);
+        fs::write(
+            s.path(id),
+            s.text(id).replace("deps: []", &format!("deps: [{deps}]")),
+        )
+        .unwrap();
+    }
+    let before = s.snapshot();
+    for flags in [
+        vec!["dep", "tree", "root"],
+        vec!["dep", "tree", "--full", "root"],
+    ] {
+        let output = s.ok(&flags);
+        let direct: Vec<_> = output
+            .lines()
+            .filter(|line| line.starts_with('├') || line.starts_with('└'))
+            .map(|line| line.split_whitespace().nth(1).unwrap())
+            .collect();
+        assert_eq!(direct, ["missing", "short", "cycle-a"]);
+        contains(
+            &output,
+            &[
+                "missing [missing]",
+                "cycle-a [open] cycle-a (already shown)",
+            ],
+        );
+    }
+    s.ok(&["dep", "cycle"]);
+    assert_eq!(s.snapshot(), before);
+}
+
+#[test]
 fn links_are_symmetric_idempotent_and_resolved_before_writes() {
     let s = Sandbox::new();
     for id in ["link-cccc", "link-dddd", "link-eeee"] {

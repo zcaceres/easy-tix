@@ -1,6 +1,6 @@
 mod storage;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, IsTerminal, Read, Write};
 use storage::{Result, Store, Ticket, timestamp};
 
@@ -562,21 +562,104 @@ fn show(store: &Store, id: &str) -> String {
     out
 }
 
-fn depth(store: &Store, id: &str, path: &mut BTreeSet<String>) -> Result<usize> {
-    if path.len() >= 256 {
-        return Err("dependency graph exceeds 256 levels".into());
-    }
-    if !path.insert(id.into()) {
-        return Ok(0);
-    }
-    let mut result = 0;
-    if let Some(ticket) = store.tickets.get(id) {
-        for dep in ticket.array("deps") {
-            result = result.max(1 + depth(store, &dep, path)?);
+/// Longest distances to leaves in the SCC condensation DAG.
+/// Iterative Kosaraju traversal handles cycles without enumerating shared paths.
+fn dependency_depths(edges: &[Vec<usize>]) -> Vec<usize> {
+    let mut reverse = vec![Vec::new(); edges.len()];
+    for (node, deps) in edges.iter().enumerate() {
+        for &dep in deps {
+            reverse[dep].push(node);
         }
     }
-    path.remove(id);
-    Ok(result)
+
+    // First DFS: finish each vertex after its dependencies.
+    let mut seen = vec![false; edges.len()];
+    let mut order = Vec::new();
+    for start in 0..edges.len() {
+        let mut stack = vec![(start, false)];
+        while let Some((node, leaving)) = stack.pop() {
+            if leaving {
+                order.push(node);
+            } else if !seen[node] {
+                seen[node] = true;
+                stack.push((node, true));
+                for &dep in edges[node].iter().rev() {
+                    if !seen[dep] {
+                        stack.push((dep, false));
+                    }
+                }
+            }
+        }
+    }
+
+    // Reverse DFS in decreasing finish order identifies SCCs in topological order.
+    let mut component = vec![usize::MAX; edges.len()];
+    let mut components = Vec::new();
+    for &start in order.iter().rev() {
+        if component[start] != usize::MAX {
+            continue;
+        }
+        let index = components.len();
+        let mut members = Vec::new();
+        let mut stack = vec![start];
+        component[start] = index;
+        while let Some(node) = stack.pop() {
+            members.push(node);
+            for &parent in &reverse[node] {
+                if component[parent] == usize::MAX {
+                    component[parent] = index;
+                    stack.push(parent);
+                }
+            }
+        }
+        components.push(members);
+    }
+
+    // Dynamic programming in reverse topological order visits each edge once.
+    let mut depths = vec![0; components.len()];
+    for (index, members) in components.iter().enumerate().rev() {
+        for &node in members {
+            for &dep in &edges[node] {
+                if component[dep] != index {
+                    depths[index] = depths[index].max(1 + depths[component[dep]]);
+                }
+            }
+        }
+    }
+    component.into_iter().map(|index| depths[index]).collect()
+}
+
+fn tree_depths(store: &Store, root: &str) -> Result<HashMap<String, usize>> {
+    // Index only the reachable graph, including missing dependencies as leaves.
+    let mut ids = vec![root.to_string()];
+    let mut indices = HashMap::from([(root.to_string(), 0)]);
+    let mut edges = vec![Vec::new()];
+    let mut node = 0;
+    while node < ids.len() {
+        if let Some(ticket) = store.tickets.get(&ids[node]) {
+            for dep in ticket.array("deps") {
+                let next = if let Some(&index) = indices.get(&dep) {
+                    index
+                } else {
+                    let index = ids.len();
+                    indices.insert(dep.clone(), index);
+                    ids.push(dep);
+                    edges.push(Vec::new());
+                    index
+                };
+                edges[node].push(next);
+            }
+        }
+        node += 1;
+    }
+    let depths = dependency_depths(&edges);
+    if depths[0] >= 256 {
+        return Err("dependency graph exceeds 256 levels".into());
+    }
+    Ok(indices
+        .into_iter()
+        .map(|(id, index)| (id, depths[index]))
+        .collect())
 }
 
 fn tree(store: &Store, args: &[String]) -> Result<String> {
@@ -584,6 +667,7 @@ fn tree(store: &Store, args: &[String]) -> Result<String> {
     let ids: Vec<_> = args.iter().filter(|a| *a != "--full").cloned().collect();
     arity(&ids, 1, 1, "dep tree [--full] <id>")?;
     let id = store.resolve(&ids[0])?;
+    let depths = tree_depths(store, &id)?;
     let mut out = String::new();
     let mut seen = BTreeSet::new();
     let mut path = BTreeSet::new();
@@ -614,7 +698,7 @@ fn tree(store: &Store, args: &[String]) -> Result<String> {
         if let Some(ticket) = store.tickets.get(&id) {
             let mut deps = Vec::new();
             for dep in ticket.array("deps") {
-                deps.push((depth(store, &dep, &mut BTreeSet::new())?, dep));
+                deps.push((depths[&dep], dep));
             }
             deps.sort();
             let next_prefix = format!(
@@ -688,4 +772,44 @@ fn cycles(store: &Store) -> Result<String> {
     } else {
         format!("Dependency cycles:\n{}\n", found.join("\n"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dependency_depths;
+
+    #[test]
+    fn shared_dependency_depths_are_computed_once_per_vertex() {
+        let levels = 128;
+        let edges: Vec<_> = (0..levels * 2)
+            .map(|node| {
+                let next = (node / 2 + 1) * 2;
+                if next < levels * 2 {
+                    vec![next, next + 1]
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+        let depths = dependency_depths(&edges);
+        for (node, depth) in depths.into_iter().enumerate() {
+            assert_eq!(depth, levels - node / 2 - 1);
+        }
+    }
+
+    #[test]
+    fn cycle_components_share_depths_including_exits_and_disconnected_nodes() {
+        // 0 <-> 1 -> 2; self-loop 3; isolated 4; 5 <-> 6.
+        let edges = vec![
+            vec![1],
+            vec![0, 2],
+            vec![],
+            vec![3],
+            vec![],
+            vec![6],
+            vec![5],
+        ];
+        assert_eq!(dependency_depths(&edges), [1, 1, 0, 0, 0, 0, 0]);
+        assert!(dependency_depths(&[]).is_empty());
+    }
 }
