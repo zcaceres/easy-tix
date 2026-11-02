@@ -1,12 +1,15 @@
-# Tickets v0.2.0
+# Tickets v0.2.1
 
-- `update` edits title, metadata, description, design, and acceptance criteria
-  while preserving notes and unrelated content.
-- `delete` removes an unreferenced ticket without a prompt; incoming dependencies,
-  links, or parent references must be resolved explicitly.
-- Tests now run entirely through Cargo, with Bash/PowerShell installer checks;
-  Python and Behave are no longer development or release requirements.
-- Release automation uses SHA-pinned Node.js 24 actions.
+- Scalar metadata now preserves leading/trailing whitespace across reads,
+  assignee filtering, and unrelated updates. Unknown metadata is preserved too.
+- `dep tree` now uses iterative strongly connected component traversal and
+  reverse-topological depth calculation instead of enumerating shared paths.
+  The 48-ticket shared-dependency stress case fell from a 3-second timeout to
+  about 5 ms on the tested Apple Silicon Mac; timings are machine-specific.
+- Agent instructions and regular examples now use `ticket` on PATH by default.
+  Project-local executables remain supported as an explicit alternative.
+- Regression coverage includes shared graphs, cycles, depth boundaries,
+  metadata whitespace, and the exact PATH-based embedded agent demonstration.
 
 Download the executable for your OS and CPU. No Rust toolchain, Bash, Python,
 package manager, or external command-line utilities are required to run it.
@@ -15,15 +18,17 @@ The README includes platform-detecting installers with checksum verification.
 
 | Platform | Asset |
 | --- | --- |
-| macOS Apple Silicon | `ticket-v0.2.0-macos-arm64` |
-| macOS Intel | `ticket-v0.2.0-macos-x86_64` |
-| Linux x86-64 | `ticket-v0.2.0-linux-x86_64` |
-| Linux ARM64 | `ticket-v0.2.0-linux-arm64` |
-| Windows x86-64 | `ticket-v0.2.0-windows-x86_64.exe` |
+| macOS Apple Silicon | `ticket-v0.2.1-macos-arm64` |
+| macOS Intel | `ticket-v0.2.1-macos-x86_64` |
+| Linux x86-64 | `ticket-v0.2.1-linux-x86_64` |
+| Linux ARM64 | `ticket-v0.2.1-linux-arm64` |
+| Windows x86-64 | `ticket-v0.2.1-windows-x86_64.exe` |
 
 Rename the download to `ticket` (`ticket.exe` on Windows). On macOS/Linux,
-run `chmod +x ticket`, then `./ticket help`. On Windows PowerShell, use
-`.\ticket.exe help`. Run `ticket agent-guide` for embedded agent instructions.
+run `chmod +x ticket`, then place it on PATH and run `ticket help` and
+`ticket agent-guide`. The README installer defaults to `~/.local/bin`.
+For an optional project-local executable, use `./ticket help` on macOS/Linux
+or `.\ticket.exe help` in PowerShell instead.
 
 Verify the download against `SHA256SUMS` (SHA-256). The checksums detect changed
 downloads but are not an independent signing identity. macOS and Windows builds

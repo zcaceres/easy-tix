@@ -139,6 +139,31 @@ anonymous request, retry later or use the manual download links. Installation
 does not configure credentials or send ticket data anywhere.
 For a manual install, continue below.
 
+### Use ticket from PATH
+
+The default workflow is `ticket` on PATH, run from the project root. Ensure
+the install directory is on PATH in the environment that launches your agent.
+For the default install directory, these commands affect the current shell only:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"  # macOS/Linux
+ticket --version
+ticket help
+ticket agent-guide
+```
+
+```powershell
+$env:Path = "$HOME\.local\bin;$env:Path"  # Windows
+ticket --version
+ticket help
+ticket agent-guide
+```
+
+Configure your agent launcher or shell environment if it needs that PATH entry
+in future sessions. The installer does not change shell profiles or agent settings.
+All regular examples below use `ticket` on PATH; a project-local executable is
+an optional alternative.
+
 ### Manual install
 
 Rename the download to `ticket` (`ticket.exe` on Windows). On macOS/Linux:
@@ -171,12 +196,12 @@ Rust 1.93.1 and tests the actual executable on each target.
 ### Example
 
 ```sh
-./ticket create "Implement login" --tags backend,auth -p 1
-./ticket ls
-./ticket show <id>
-./ticket start <id>
-./ticket add-note <id> "Implementation underway"
-./ticket close <id>
+ticket create "Implement login" --tags backend,auth -p 1
+ticket ls
+ticket show <id>
+ticket start <id>
+ticket add-note <id> "Implementation underway"
+ticket close <id>
 ```
 
 ## Commands
@@ -219,10 +244,10 @@ These commands are available starting with v0.2.0; users of v0.1.0 should upgrad
 using the installer above.
 
 ```sh
-./ticket update <id> --title "Clarified task" -p 1 --assignee "Alice"
-./ticket update <id> --description "New scope" --acceptance "Checks pass"
-./ticket update <id> --parent "" --tags ""  # Clear parent and tags
-./ticket delete <id>
+ticket update <id> --title "Clarified task" -p 1 --assignee "Alice"
+ticket update <id> --description "New scope" --acceptance "Checks pass"
+ticket update <id> --parent "" --tags ""  # Clear parent and tags
+ticket delete <id>
 ```
 
 `update` leaves unspecified fields, ID, creation timestamp, dependencies, links,
@@ -256,11 +281,25 @@ Existing files created by the Bash CLI require no migration. Unknown metadata
 fields and Markdown bodies are preserved on updates. Frontmatter is a restricted
 line-based format, not full YAML: duplicate fields, mismatched filename/ID,
 and malformed headers fail explicitly instead of being silently misread.
+Fields use `key: value`: one optional ASCII space immediately after `:` is
+formatting; any remaining spaces, tabs, or Unicode whitespace belong to the value.
+Scalar text such as assignees and external references preserves that whitespace
+on creation, reads, and updates; assignee filters match the exact stored value.
+Tag entries are still trimmed around commas.
 Errors consistently go to stderr with a nonzero exit status, including missing
 links/dependencies. Unknown options and extra arguments are rejected. New IDs
 use the first three alphanumeric characters of the working directory plus a
 four-character suffix; existing ID prefixes continue to work unchanged.
-Dependency traversals reject graphs deeper than 256 levels.
+Dependency traversals are limited to 256 levels.
+
+`dep tree` sorts dependencies by longest depth, then ID. It computes sorting
+depths once using strongly connected components and a reverse-topological pass,
+so shared prerequisites are not repeatedly traversed. Tickets in the same cycle
+share a sorting depth. Default output expands each ticket once and marks repeated
+references as already shown; `--full` expands shared branches again but still
+cuts cycles. Consequently, `--full` can produce much larger output than the graph
+itself. Depth analysis is linear in reachable vertices and dependency edges;
+sibling sorting and writing the tree have their own costs.
 
 ## Security boundary
 
@@ -308,12 +347,11 @@ See [the coverage map](tests/README.md) for the retired suites' replacements.
 Read [AGENT_GUIDE.md](AGENT_GUIDE.md) for the agent workflow, relationship
 semantics, error handling, and an executable demonstration tested by `make test`.
 
-For use in another project, copy the downloaded `ticket` into that
-project's root (preserving its executable bit). The guide is embedded:
-`./ticket agent-guide` prints it, or `./ticket agent-guide > AGENT_GUIDE.md`
-saves a local copy. Keep `LICENSE`
-with redistributed copies. Nothing installs itself or modifies agent settings.
-If you prefer a PATH installation as `tk`, adjust the instructions accordingly.
+Install `ticket` on PATH in your agent's environment, and run it from the
+consuming project's root. The guide is embedded: `ticket agent-guide` prints it,
+or `ticket agent-guide > AGENT_GUIDE.md` saves a local copy.
+Keep `LICENSE` with redistributed copies. Nothing installs itself or modifies
+agent settings.
 
 Append this snippet to the consuming project's `AGENTS.md`, `CLAUDE.md`, or
 the instruction file its agent actually loads. Do not replace existing rules.
@@ -322,11 +360,11 @@ Adjust the paths if you put these files elsewhere:
 ```markdown
 ## Local task tracking
 
-This project uses Tickets. From the project root, run `./ticket help` and
-`./ticket agent-guide` before managing work. Tickets live in `.tickets/`; verify any
+This project uses Tickets. From the project root, run `ticket help` and
+`ticket agent-guide` before managing work. Tickets live in `.tickets/`; verify any
 `TICKETS_DIR` override before running commands.
 
-Inspect `./ticket ls` and `./ticket ready`, then `show` the chosen full ID.
+Inspect `ticket ls` and `ticket ready`, then `show` the chosen full ID.
 Coordinate ownership before `start`: ready includes in-progress work and start
 is not a lock. `dep A B` means A depends on B; parent/child grouping is separate.
 Use the full IDs returned by create, quote arguments, and check command failures.
@@ -338,6 +376,11 @@ services, or Git synchronization are available.
 
 The guide is not automatically injected into an agent's context. This snippet
 makes discovery explicit; confirm your agent reads the chosen instruction file.
+
+For an optional project-local install, copy the executable into the project root
+and preserve its executable bit. Replace `ticket` with `./ticket` in the snippet
+and guide commands (`.\ticket.exe` in PowerShell). If installed as `tk`, substitute
+`tk` instead. Do not mix invocation styles or assume a local executable is on PATH.
 
 ## License
 

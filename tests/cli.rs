@@ -301,6 +301,137 @@ fn tree_depth_then_id_order_full_output_and_cycles() {
 }
 
 #[test]
+fn tree_handles_layered_shared_dependencies_without_expanding_paths() {
+    let s = Sandbox::new();
+    let levels = 128;
+    for level in 0..levels {
+        for side in ["a", "b"] {
+            let id = format!("dag-{level:03}-{side}");
+            s.fixture(&id, &id, 2);
+            if level + 1 < levels {
+                let next = level + 1;
+                let text = s.text(&id).replace(
+                    "deps: []",
+                    &format!("deps: [dag-{next:03}-a, dag-{next:03}-b]"),
+                );
+                fs::write(s.path(&id), text).unwrap();
+            }
+        }
+    }
+    let before = s.snapshot();
+    let tree = s.ok(&["dep", "tree", "dag-000-a"]);
+    assert_eq!(tree.lines().count(), levels * 4 - 5);
+    assert_eq!(tree.matches("(already shown)").count(), levels * 2 - 4);
+    contains(&tree, &["dag-127-a [open]", "dag-127-b [open]"]);
+    assert_eq!(s.snapshot(), before);
+}
+
+#[test]
+fn tree_depth_limit_includes_cached_shared_subgraphs() {
+    for chain_length in [254, 255] {
+        let s = Sandbox::new();
+        s.fixture("leaf", "Leaf", 2);
+        s.fixture("root", "Root", 2);
+        fs::write(
+            s.path("root"),
+            s.text("root")
+                .replace("deps: []", "deps: [leaf, chain-000]"),
+        )
+        .unwrap();
+        for node in 0..chain_length {
+            let id = format!("chain-{node:03}");
+            let dep = if node + 1 == chain_length {
+                "leaf".to_string()
+            } else {
+                format!("chain-{:03}", node + 1)
+            };
+            s.fixture(&id, &id, 2);
+            fs::write(
+                s.path(&id),
+                s.text(&id).replace("deps: []", &format!("deps: [{dep}]")),
+            )
+            .unwrap();
+        }
+        let before = s.snapshot();
+        if chain_length == 254 {
+            contains(&s.ok(&["dep", "tree", "root"]), &["leaf [open]"]);
+        } else {
+            contains(
+                &s.fail(&["dep", "tree", "root"]),
+                &["dependency graph exceeds 256 levels"],
+            );
+        }
+        assert_eq!(s.snapshot(), before);
+    }
+}
+
+#[test]
+fn tree_bounds_cyclic_rendering_without_scanning_unreachable_components() {
+    let s = Sandbox::new();
+    s.fixture("leaf", "Leaf", 2);
+    for node in 0..257 {
+        let id = format!("cycle-{node:03}");
+        let dep = format!("cycle-{:03}", (node + 1) % 257);
+        s.fixture(&id, &id, 2);
+        fs::write(
+            s.path(&id),
+            s.text(&id).replace("deps: []", &format!("deps: [{dep}]")),
+        )
+        .unwrap();
+    }
+    let before = s.snapshot();
+    assert_eq!(s.ok(&["dep", "tree", "leaf"]), "leaf [open] Leaf\n");
+    for args in [
+        vec!["dep", "tree", "cycle-000"],
+        vec!["dep", "tree", "--full", "cycle-000"],
+    ] {
+        contains(&s.fail(&args), &["dependency graph exceeds 256 levels"]);
+    }
+    assert_eq!(s.snapshot(), before);
+}
+
+#[test]
+fn tree_orders_cycle_components_and_missing_leaves() {
+    let s = Sandbox::new();
+    for (id, deps) in [
+        ("root", "cycle-a, missing, short"),
+        ("cycle-a", "cycle-b"),
+        ("cycle-b", "cycle-a, tail"),
+        ("tail", ""),
+        ("short", ""),
+    ] {
+        s.fixture(id, id, 2);
+        fs::write(
+            s.path(id),
+            s.text(id).replace("deps: []", &format!("deps: [{deps}]")),
+        )
+        .unwrap();
+    }
+    let before = s.snapshot();
+    for flags in [
+        vec!["dep", "tree", "root"],
+        vec!["dep", "tree", "--full", "root"],
+    ] {
+        let output = s.ok(&flags);
+        let direct: Vec<_> = output
+            .lines()
+            .filter(|line| line.starts_with('├') || line.starts_with('└'))
+            .map(|line| line.split_whitespace().nth(1).unwrap())
+            .collect();
+        assert_eq!(direct, ["missing", "short", "cycle-a"]);
+        contains(
+            &output,
+            &[
+                "missing [missing]",
+                "cycle-a [open] cycle-a (already shown)",
+            ],
+        );
+    }
+    s.ok(&["dep", "cycle"]);
+    assert_eq!(s.snapshot(), before);
+}
+
+#[test]
 fn links_are_symmetric_idempotent_and_resolved_before_writes() {
     let s = Sandbox::new();
     for id in ["link-cccc", "link-dddd", "link-eeee"] {
@@ -554,6 +685,97 @@ fn legacy_body_and_unknown_metadata_round_trip() {
     assert!(text.ends_with(body));
     contains(&text, &["custom: keep / & \\\n", "status: in_progress"]);
     assert!(!s.root.join("injected").exists());
+}
+
+#[test]
+fn metadata_whitespace_survives_filters_and_unrelated_writes() {
+    for value in [
+        " Alice ",
+        "  Alice  ",
+        "\tAlice\t",
+        "\u{2003}Alice\u{a0}",
+        " \t ",
+    ] {
+        let s = Sandbox::new();
+        let blocker = s.create(&["Blocker"]);
+        let id = s.create(&["Whitespace", "-a", value, "--external-ref", value]);
+        let original = s.text(&id).replace(
+            "status: open\n",
+            &format!("status: open\ncustom: {value}\n"),
+        );
+        fs::write(s.path(&id), &original).unwrap();
+        let check_values = || {
+            for text in [s.text(&id), s.ok(&["show", &id])] {
+                for field in ["assignee", "external-ref", "custom"] {
+                    let line = format!("{field}: {value}");
+                    assert!(
+                        text.lines().any(|l| l == line),
+                        "missing {line:?} in {text:?}"
+                    );
+                }
+            }
+        };
+        check_values();
+        for command in ["ls", "list", "ready"] {
+            for flags in [
+                vec!["-a".into(), value.into()],
+                vec![format!("--assignee={value}")],
+            ] {
+                let args: Vec<_> = std::iter::once(command)
+                    .chain(flags.iter().map(String::as_str))
+                    .collect();
+                let output = s.ok(&args);
+                assert_eq!(output.lines().count(), 1);
+                contains(&output, &[&id]);
+            }
+        }
+        assert_eq!(s.text(&id), original, "reads must not change the file");
+        s.ok(&["dep", &id, &blocker]);
+        contains(&s.ok(&["blocked", "-a", value]), &[&id]);
+        check_values();
+        s.ok(&["undep", &id, &blocker]);
+        s.ok(&["link", &id, &blocker]);
+        check_values();
+        s.ok(&["unlink", &id, &blocker]);
+        for (command, status) in [
+            ("start", "in_progress"),
+            ("close", "closed"),
+            ("reopen", "open"),
+        ] {
+            let before = s.text(&id);
+            let status_line = before.lines().find(|l| l.starts_with("status:")).unwrap();
+            s.ok(&[command, &id]);
+            assert_eq!(
+                s.text(&id),
+                before.replace(status_line, &format!("status: {status}"))
+            );
+            check_values();
+            if status == "closed" {
+                contains(&s.ok(&["closed", &format!("--assignee={value}")]), &[&id]);
+            }
+        }
+        s.ok(&["update", &id, "-p", "1"]);
+        s.ok(&["add-note", &id, "Unrelated note"]);
+        check_values();
+        let updated_value = format!(" {value} ");
+        s.ok(&[
+            "update",
+            &id,
+            "-a",
+            &updated_value,
+            "--external-ref",
+            &updated_value,
+        ]);
+        for field in ["assignee", "external-ref"] {
+            contains(
+                &s.ok(&["show", &id]),
+                &[&format!("{field}: {updated_value}\n")],
+            );
+        }
+        contains(&s.ok(&["ready", "-a", &updated_value]), &[&id]);
+        s.ok(&["close", &id]);
+        contains(&s.text(&id), &[&format!("assignee: {updated_value}\n")]);
+    }
 }
 
 #[test]
@@ -970,16 +1192,24 @@ fn delete_rejects_ambiguous_ids_and_force_but_allows_outgoing_dependencies() {
 #[test]
 fn documented_agent_workflow_runs_verbatim() {
     let s = Sandbox::new();
-    fs::copy(binary(), s.root.join("ticket")).unwrap();
+    let bin = s.root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::copy(binary(), bin.join("ticket")).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
     let script = snippet("AGENT_GUIDE.md", "agent-demo");
     let mut cmd = std::process::Command::new("bash");
     let output = success(
         cmd.arg("-c")
             .arg(script)
             .current_dir(&s.root)
+            .env("PATH", path)
             .env_remove("TICKETS_DIR"),
         "",
     );
+    assert!(!s.root.join("ticket").exists());
     assert_eq!(s.files().len(), 2);
     let mut prerequisite = String::new();
     let mut delivery = String::new();

@@ -55,7 +55,9 @@ impl Ticket {
                     "invalid or duplicate field '{key}' in {filename_id}"
                 ));
             }
-            ticket.fields.push((key.into(), value.trim_start().into()));
+            // Serialization adds one formatting space; any further whitespace is data.
+            let value = value.strip_prefix(' ').unwrap_or(value);
+            ticket.fields.push((key.into(), value.into()));
         }
         if !closed || ticket.get("id") != filename_id {
             return Err(format!(
@@ -487,6 +489,37 @@ mod tests {
         assert!(t.serialize().contains("custom: literal / & \\\n"));
         assert!(t.serialize().ends_with("---\nstatus: body\n"));
         assert_eq!(t.get("status"), "closed");
+    }
+    #[test]
+    fn metadata_whitespace_round_trips() {
+        for value in [
+            "",
+            "Alice",
+            " Alice ",
+            "  Alice  ",
+            "\tAlice\t",
+            "\u{2003}Alice\u{a0}",
+            " \t ",
+        ] {
+            for newline in ["\n", "\r\n"] {
+                let text =
+                    format!("---\nid: a\ncustom: {value}\n---\n# Title\n").replace('\n', newline);
+                let mut ticket = Ticket::parse(&text, "a").unwrap();
+                for _ in 0..3 {
+                    assert_eq!(ticket.get("custom"), value);
+                    ticket = Ticket::parse(&ticket.serialize(), "a").unwrap();
+                }
+            }
+        }
+        // An unspaced separator is still supported; a tab is literal value data.
+        for (line, value) in [
+            ("custom:plain", "plain"),
+            ("custom:", ""),
+            ("custom:\tvalue", "\tvalue"),
+        ] {
+            let ticket = Ticket::parse(&format!("---\nid:a\n{line}\n---\n"), "a").unwrap();
+            assert_eq!(ticket.get("custom"), value);
+        }
     }
     #[test]
     fn malformed_metadata_rejected() {

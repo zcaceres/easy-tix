@@ -1,7 +1,7 @@
 # Project guidance
 
 See README.md for behavior and the local-only security boundary.
-For using Tickets to manage tasks, read AGENT_GUIDE.md and run `./ticket help`.
+For using Tickets to manage tasks, read AGENT_GUIDE.md and run `ticket help`.
 
 - Keep runtime behavior local. Do not add plugins, shell evaluation, editor or
   pager execution, or network integrations to the CLI.

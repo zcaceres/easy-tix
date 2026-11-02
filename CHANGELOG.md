@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 — predictable metadata and efficient dependency trees
+
+- Preserve scalar metadata whitespace across reads, exact assignee filters,
+  and unrelated writes, including tabs, Unicode whitespace, and unknown fields.
+- Replace exponential dependency-depth walks with iterative Kosaraju SCC
+  traversal and reverse-topological depth calculation. Preserve DAG ordering,
+  cycle rendering, missing dependencies, and the 256-level traversal limit.
+- Make PATH-installed `ticket` the default in agent instructions and examples;
+  retain project-local executables as an explicit alternative.
+- Add metadata and shared-graph regressions, and execute the embedded agent
+  demonstration through PATH rather than a project-local executable.
+
 ## 0.2.0 — editing, deletion, and Rust tests
 
 - Replace Python CLI tests and the 104 Behave scenarios with grouped Rust
