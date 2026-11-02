@@ -1192,16 +1192,24 @@ fn delete_rejects_ambiguous_ids_and_force_but_allows_outgoing_dependencies() {
 #[test]
 fn documented_agent_workflow_runs_verbatim() {
     let s = Sandbox::new();
-    fs::copy(binary(), s.root.join("ticket")).unwrap();
+    let bin = s.root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::copy(binary(), bin.join("ticket")).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
     let script = snippet("AGENT_GUIDE.md", "agent-demo");
     let mut cmd = std::process::Command::new("bash");
     let output = success(
         cmd.arg("-c")
             .arg(script)
             .current_dir(&s.root)
+            .env("PATH", path)
             .env_remove("TICKETS_DIR"),
         "",
     );
+    assert!(!s.root.join("ticket").exists());
     assert_eq!(s.files().len(), 2);
     let mut prerequisite = String::new();
     let mut delivery = String::new();

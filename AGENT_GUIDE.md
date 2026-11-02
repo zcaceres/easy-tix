@@ -1,11 +1,13 @@
 # Using Tickets as an agent
 
-Tickets is a local CLI, not a service. This guide assumes the executable is
-`./ticket` in the project root. Run commands from that root; if your project
-installs it as `tk`, substitute `tk`. Run `./ticket help` for exact syntax.
-The standalone binary embeds this guide: `./ticket agent-guide` prints it.
-On Windows, use `.\ticket.exe` in PowerShell. No MCP server, plugin, account,
-network access, shell utilities, or package installation is needed at runtime.
+Tickets is a local CLI, not a service. Install `ticket` on PATH in the environment
+your agent uses, and run commands from the project root. Run `ticket help` for
+exact syntax. The standalone binary embeds this guide: `ticket agent-guide`
+prints it. On Windows, `ticket` resolves to `ticket.exe` on PATH.
+For an optional project-local executable, substitute `./ticket` on macOS/Linux
+or `.\ticket.exe` in PowerShell throughout this guide. If installed as `tk`,
+substitute `tk`. No MCP server, plugin, account, network access, shell utilities,
+or package installation is needed at runtime.
 The shell examples below use Bash syntax; the CLI itself does not require Bash.
 
 ## Start a session
@@ -13,14 +15,14 @@ The shell examples below use Bash syntax; the CLI itself does not require Bash.
 1. Confirm the project root and ticket directory. The CLI searches ancestors for
    `.tickets/`; `TICKETS_DIR`, if set, overrides that search. Do not accidentally
    operate on another project's store.
-2. Run `./ticket ls` to inspect existing work before creating duplicates, then
-   `./ticket ready` to find active tickets with resolved dependencies.
-3. Read the selected ticket with `./ticket show FULL_ID`, including its
+2. Run `ticket ls` to inspect existing work before creating duplicates, then
+   `ticket ready` to find active tickets with resolved dependencies.
+3. Read the selected ticket with `ticket show FULL_ID`, including its
    acceptance criteria, dependencies, and notes. `ready` includes both `open`
    and `in_progress` tickets; it is not an unclaimed-work queue.
 4. Coordinate ownership with other participants before starting. `start` changes
    status but is not an atomic claim or lock. Avoid concurrent writes to a ticket.
-5. Run `./ticket start FULL_ID` and add a brief note describing your plan.
+5. Run `ticket start FULL_ID` and add a brief note describing your plan.
 
 If the store does not exist, read commands fail. Confirm that you are in the
 right project, then use `create` to initialize it only when new work is intended.
@@ -29,11 +31,11 @@ An empty or failed `ready` result is not permission to ignore blockers.
 ## Create and relate work
 
 - Capture the full ID printed by a successful `create`; never invent IDs.
-  In Bash: `id=$(./ticket create "Fix login" -t bug -p 1 --tags auth)`.
+  In Bash: `id=$(ticket create "Fix login" -t bug -p 1 --tags auth)`.
   Check success before using `$id`; quote IDs and text in subsequent commands.
 - Use `--description` for scope and `--acceptance` for verifiable completion
   criteria. Priority is 0 (highest) through 4 (lowest); default is 2.
-- `./ticket dep A B` means **A depends on B**: finish B before A. `undep A B`
+- `ticket dep A B` means **A depends on B**: finish B before A. `undep A B`
   removes that dependency. Do not remove a real blocker merely to make A ready.
 - `create "Child" --parent PARENT_ID` groups work under a parent. This does
   **not** make the child depend on the parent, gate the parent on its children,
@@ -55,7 +57,7 @@ An empty or failed `ready` result is not permission to ignore blockers.
   expand the note's contents:
 
   ```sh
-  ./ticket add-note "$id" <<'NOTE'
+  ticket add-note "$id" <<'NOTE'
   Progress: implementation is ready for review.
   Verification: record the actual commands and results here.
   Remaining: describe the next action, or explicitly say none.
@@ -65,7 +67,7 @@ An empty or failed `ready` result is not permission to ignore blockers.
 - Before closing, check the acceptance criteria and run the relevant project
   checks. Record their actual results and any checks not run. The CLI does not
   verify completion or prevent closing a blocked ticket.
-- Run `./ticket close FULL_ID` only when the work is complete. Use `reopen`
+- Run `ticket close FULL_ID` only when the work is complete. Use `reopen`
   when more work is needed. For a handoff, leave unfinished work open or
   in progress as appropriate and record ownership/next steps.
 - Closing a ticket does not commit code, push, publish, or synchronize anything.
@@ -95,7 +97,7 @@ An empty or failed `ready` result is not permission to ignore blockers.
 
 ## Runnable demonstration
 
-Run this **only in a disposable directory containing a copy of `ticket`**.
+Run this **only in a disposable directory, with `ticket` available on PATH**.
 The block explicitly selects that directory's `.tickets/`, avoiding ancestor
 stores or an inherited override. It creates two demo tickets and simulates completion;
 the notes are explicitly demonstrations, not evidence of real development work.
@@ -106,36 +108,36 @@ The offline regression suite executes this exact Bash block in an isolated store
 set -euo pipefail
 export TICKETS_DIR="$PWD/.tickets"
 
-prerequisite=$(./ticket create "Demo: define interface" \
+prerequisite=$(ticket create "Demo: define interface" \
   --acceptance "Demo interface is described in a note" --tags demo)
-delivery=$(./ticket create "Demo: implement interface" \
+delivery=$(ticket create "Demo: implement interface" \
   --acceptance "Demo dependency workflow is exercised" --tags demo)
-./ticket dep "$delivery" "$prerequisite"
+ticket dep "$delivery" "$prerequisite"
 
 # The prerequisite is ready; delivery is blocked.
-./ticket ls
-./ticket ready
-./ticket blocked
-./ticket show "$prerequisite"
-./ticket start "$prerequisite"
-./ticket add-note "$prerequisite" "Demo only: interface described; no real code changed."
-./ticket close "$prerequisite"
+ticket ls
+ticket ready
+ticket blocked
+ticket show "$prerequisite"
+ticket start "$prerequisite"
+ticket add-note "$prerequisite" "Demo only: interface described; no real code changed."
+ticket close "$prerequisite"
 
 # Delivery now has its prerequisite resolved.
-./ticket ready
-./ticket show "$delivery"
-./ticket start "$delivery"
-./ticket add-note "$delivery" <<'NOTE'
+ticket ready
+ticket show "$delivery"
+ticket start "$delivery"
+ticket add-note "$delivery" <<'NOTE'
 Demo only: exercised the dependency workflow.
 No application tests were run and no production work is claimed.
 NOTE
-./ticket close "$delivery"
-./ticket ls --status=closed
+ticket close "$delivery"
+ticket ls --status=closed
 
 # Exercise corrections and deletion on a separate disposable ticket.
-scratch=$(./ticket create "Demo: accidental duplicate")
-./ticket update "$scratch" --title "Demo: corrected duplicate" --tags demo
-./ticket show "$scratch"
-./ticket delete "$scratch"
+scratch=$(ticket create "Demo: accidental duplicate")
+ticket update "$scratch" --title "Demo: corrected duplicate" --tags demo
+ticket show "$scratch"
+ticket delete "$scratch"
 ```
 <!-- agent-demo:end -->
